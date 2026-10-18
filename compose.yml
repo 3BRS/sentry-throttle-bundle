@@ -1,0 +1,22 @@
+services:
+    php:
+        build:
+            context: ./.docker/php
+            args:
+                PHP_VERSION: ${PHP_VERSION:-8.5}
+        image: sentry-throttle-bundle-php:${PHP_VERSION:-8.5}
+        user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+        working_dir: /app
+        environment:
+            COMPOSER_HOME: /tmp/composer
+            HOME: /tmp
+            XDEBUG_MODE: "off"
+            SENTRY_THROTTLE_TEST_REDIS_DSN: redis://redis:6379
+        volumes:
+            - ./:/app
+        depends_on:
+            - redis
+        command: sleep infinity
+
+    redis:
+        image: redis:7-alpine
