@@ -1,0 +1,88 @@
+{
+    "name": "3brs/sentry-throttle-bundle",
+    "type": "symfony-bundle",
+    "description": "Symfony bundle that throttles Sentry events per fingerprint and per application window, with Redis counters and fail-open behaviour",
+    "keywords": [
+        "symfony",
+        "symfony-bundle",
+        "sentry",
+        "monolog",
+        "throttle",
+        "rate-limit",
+        "redis"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "3BRS",
+            "email": "team@3brs.com"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "psr/log": "^1.1 || ^2.0 || ^3.0",
+        "symfony/cache": "^5.4 || ^6.0 || ^7.0 || ^8.0",
+        "symfony/config": "^5.4 || ^6.0 || ^7.0 || ^8.0",
+        "symfony/dependency-injection": "^5.4 || ^6.0 || ^7.0 || ^8.0",
+        "symfony/http-kernel": "^5.4 || ^6.0 || ^7.0 || ^8.0"
+    },
+    "require-dev": {
+        "ext-redis": "*",
+        "deptrac/deptrac": "^2.0 || ^3.0",
+        "monolog/monolog": "^2.5 || ^3.0",
+        "phpstan/extension-installer": "^1.4",
+        "phpstan/phpstan": "^2.1",
+        "phpstan/phpstan-symfony": "^2.0",
+        "phpunit/phpunit": "^10.5 || ^11.5 || ^12.0 || ^13.0",
+        "predis/predis": "^2.0 || ^3.0",
+        "rector/rector": "^2.0",
+        "sentry/sentry": "^4.0",
+        "sentry/sentry-symfony": "^5.0",
+        "symfony/framework-bundle": "^5.4 || ^6.0 || ^7.0 || ^8.0",
+        "symfony/monolog-bundle": "^3.8 || ^4.0",
+        "symplify/easy-coding-standard": "^13.0"
+    },
+    "conflict": {
+        "monolog/monolog": "<2.5",
+        "predis/predis": "<2.0",
+        "sentry/sentry": "<4.0"
+    },
+    "suggest": {
+        "ext-redis": "Redis client for the throttle counters (phpredis)",
+        "predis/predis": "Redis client for the throttle counters when ext-redis is not installed",
+        "sentry/sentry-symfony": "Throttle events of the official Sentry SDK via before_send",
+        "monolog/monolog": "Throttle a Monolog handler that sends events to Sentry"
+    },
+    "autoload": {
+        "psr-4": {
+            "ThreeBRS\\SentryThrottleBundle\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ThreeBRS\\SentryThrottleBundle\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test-unit": "phpunit --testsuite=\"Unit Tests\"",
+        "test-integration": "phpunit --testsuite=\"Integration Tests\"",
+        "ecs": "ecs check",
+        "ecs-fix": "ecs check --fix",
+        "phpstan": "phpstan analyse",
+        "deptrac": "@php -d error_reporting='E_ALL & ~E_DEPRECATED' vendor/bin/deptrac analyse --cache-file=var/cache/deptrac.cache",
+        "rector": "rector process --dry-run",
+        "rector-fix": "rector process"
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "1.0-dev"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "phpstan/extension-installer": true
+        },
+        "sort-packages": true
+    }
+}

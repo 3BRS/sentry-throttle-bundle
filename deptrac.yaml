@@ -1,0 +1,73 @@
+deptrac:
+    paths:
+        - ./src
+
+    layers:
+        -   name: Bundle
+            collectors:
+                -   type: class
+                    value: ^ThreeBRS\\SentryThrottleBundle\\ThreeBRSSentryThrottleBundle$
+
+        -   name: DependencyInjection
+            collectors:
+                -   type: directory
+                    value: src/DependencyInjection/.*
+
+        -   name: Throttle
+            collectors:
+                -   type: directory
+                    value: src/Throttle/.*
+
+        -   name: Fingerprint
+            collectors:
+                -   type: directory
+                    value: src/Fingerprint/.*
+
+        -   name: Storage
+            collectors:
+                -   type: directory
+                    value: src/Storage/.*
+
+        -   name: Sentry
+            collectors:
+                -   type: directory
+                    value: src/Sentry/.*
+
+        -   name: Monolog
+            collectors:
+                -   type: directory
+                    value: src/Monolog/.*
+
+        -   name: SentrySdk
+            collectors:
+                -   type: classLike
+                    value: ^Sentry\\
+
+        -   name: MonologLibrary
+            collectors:
+                -   type: classLike
+                    value: ^Monolog\\
+
+    ruleset:
+        Bundle:
+            - DependencyInjection
+        DependencyInjection:
+            - Throttle
+            - Fingerprint
+            - Storage
+            - Sentry
+            - Monolog
+            - SentrySdk
+            - MonologLibrary
+        Throttle:
+            - Storage
+        Fingerprint: ~
+        Storage: ~
+        Sentry:
+            - Throttle
+            - Fingerprint
+            - SentrySdk
+        Monolog:
+            - Throttle
+            - Fingerprint
+            - MonologLibrary
