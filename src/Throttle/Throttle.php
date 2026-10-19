@@ -13,6 +13,8 @@ use ThreeBRS\SentryThrottleBundle\Storage\StorageInterface;
  */
 final class Throttle implements ThrottleInterface
 {
+    public const LOG_CHANNEL = 'sentry_throttle';
+
     private const KEY_PREFIX = 'sentry_throttle:';
 
     private const DROPPED_TTL_SECONDS = 86400;
@@ -68,6 +70,7 @@ final class Throttle implements ThrottleInterface
                 $this->failedWindow = $window;
                 $decision = $this->fallback($window);
                 $this->logger->warning('Sentry throttle cannot use Redis; this process sends at most {limit} events until the current {window}s window ends.', [
+                    'prefix' => $this->prefix,
                     'limit' => $this->fallbackMaxPerWindow,
                     'window' => $this->windowSeconds,
                     'error' => $e->getMessage(),

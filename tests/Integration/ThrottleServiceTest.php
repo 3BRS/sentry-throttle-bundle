@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ThreeBRS\SentryThrottleBundle\Tests\Integration;
 
 use Monolog\Handler\TestHandler;
+use PHPUnit\Framework\Attributes\RequiresMethod;
 use Symfony\Bundle\MonologBundle\MonologBundle;
 use Symfony\Component\Config\Definition\Exception\InvalidConfigurationException;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
@@ -139,12 +140,9 @@ final class ThrottleServiceTest extends IntegrationTestCase
         }
     }
 
+    #[RequiresMethod(MonologBundle::class, 'build')]
     public function testLogsStorageFailureToSentryThrottleChannel(): void
     {
-        if (! class_exists(MonologBundle::class)) {
-            $this->markTestSkipped('symfony/monolog-bundle is not installed.');
-        }
-
         $container = $this->bootKernel([
             'prefix' => 'app',
             'redis' => [
@@ -160,7 +158,7 @@ final class ThrottleServiceTest extends IntegrationTestCase
                     'test' => [
                         'type' => 'service',
                         'id' => 'test.log_handler',
-                        'channels' => [ThreeBRSSentryThrottleExtension::LOG_CHANNEL],
+                        'channels' => [Throttle::LOG_CHANNEL],
                     ],
                 ],
             ]);
