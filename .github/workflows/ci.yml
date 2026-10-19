@@ -1,0 +1,120 @@
+name: CI
+
+on:
+    push:
+        branches: [ main ]
+    pull_request:
+        branches: [ main ]
+
+permissions:
+    contents: read
+
+defaults:
+    run:
+        # An explicit bash shell runs with -o pipefail, the default one does not.
+        shell: bash
+
+jobs:
+    test:
+        name: ${{ matrix.job }}
+        runs-on: ubuntu-latest
+
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    -   job: lowest
+                        php: "8.1"
+                        prefer-lowest: true
+                    -   job: symfony-6-0
+                        php: "8.1"
+                        prefer-lowest: true
+                    -   job: highest
+                        php: "8.5"
+                        prefer-lowest: false
+                    -   job: without-optional-packages
+                        php: "8.5"
+                        prefer-lowest: false
+
+        services:
+            # Reachable on localhost:6379, the DSN phpunit.xml.dist uses.
+            redis:
+                image: redis:7.4
+                ports:
+                    - 6379:6379
+                options: >-
+                    --health-cmd "redis-cli ping"
+                    --health-interval 2s
+                    --health-timeout 5s
+                    --health-retries 15
+
+        steps:
+            -   name: Checkout
+                uses: actions/checkout@v7
+
+            -   name: Setup PHP
+                uses: shivammathur/setup-php@v2
+                with:
+                    php-version: ${{ matrix.php }}
+                    extensions: redis
+                    coverage: none
+
+            -   name: Validate composer.json
+                if: matrix.job == 'highest'
+                run: composer validate --strict
+
+            -   name: Leave out sentry-symfony
+                if: matrix.job == 'lowest'
+                # Every sentry-symfony 5.x needs Sentry SDK 4.6.1 or later; without it the lowest SDK is 4.0.
+                run: composer remove --dev --no-update --no-interaction sentry/sentry-symfony
+
+            -   name: Require Symfony 6.0 and Monolog 2.5
+                if: matrix.job == 'symfony-6-0'
+                run: |
+                    grep -o -E '"symfony/[^"]+"' composer.json | tr -d '"' | grep -v -x 'symfony/monolog-bundle' | sort -u \
+                        | xargs printf '%s:6.0.* ' | xargs composer require --no-interaction --no-update
+                    composer require --dev --no-interaction --no-update 'monolog/monolog:2.5.*'
+
+            -   name: Leave out the Sentry and Monolog packages
+                if: matrix.job == 'without-optional-packages'
+                run: composer remove --dev --no-update --no-interaction sentry/sentry sentry/sentry-symfony monolog/monolog symfony/monolog-bundle
+
+            -   name: Get the Composer cache directory
+                id: composer-cache
+                run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+            -   name: Cache Composer packages
+                uses: actions/cache@v6
+                with:
+                    path: ${{ steps.composer-cache.outputs.dir }}
+                    key: composer-${{ matrix.job }}-${{ hashFiles('composer.json') }}
+                    restore-keys: composer-${{ matrix.job }}-
+
+            -   name: Install dependencies
+                if: ${{ !matrix.prefer-lowest }}
+                run: composer update --no-interaction --no-progress
+
+            -   name: Install the lowest dependencies
+                if: matrix.prefer-lowest
+                run: composer update --no-interaction --no-progress --prefer-lowest --prefer-stable
+
+            -   name: PHPUnit
+                run: vendor/bin/phpunit
+
+            # Static analysis runs against the highest dependencies only: the Monolog compatibility trait is analysed
+            # for the installed Monolog version.
+            -   name: ECS
+                if: matrix.job == 'highest'
+                run: composer ecs
+
+            -   name: PHPStan
+                if: matrix.job == 'highest'
+                run: composer phpstan
+
+            -   name: Deptrac
+                if: matrix.job == 'highest'
+                run: composer deptrac
+
+            -   name: Rector
+                if: matrix.job == 'highest'
+                run: composer rector
