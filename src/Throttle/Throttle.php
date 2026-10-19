@@ -28,6 +28,8 @@ final class Throttle implements ThrottleInterface
 
     private bool $deciding = false;
 
+    private readonly LoggerInterface $logger;
+
     /**
      * @param (\Closure(): int)|null $clock current Unix time
      */
@@ -38,9 +40,10 @@ final class Throttle implements ThrottleInterface
         private readonly int $perFingerprint,
         private readonly int $maxPerWindow,
         private readonly int $fallbackMaxPerWindow,
-        private readonly LoggerInterface $logger = new NullLogger(),
+        ?LoggerInterface $logger = null,
         private readonly ?\Closure $clock = null,
     ) {
+        $this->logger = $logger ?? new NullLogger();
     }
 
     public function decide(string $fingerprint): Decision
