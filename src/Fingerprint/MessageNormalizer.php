@@ -20,7 +20,7 @@ final class MessageNormalizer
         // Runs first: UUID groups without a digit would survive the token rule.
         '/(?<![0-9A-Za-z])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9A-Za-z])/i',
         // Alphanumeric token containing a digit: numbers, hashes, IDs.
-        '/(?<![0-9A-Za-z])[A-Za-z]*+[0-9][0-9A-Za-z]*+/',
+        '/(?<![0-9A-Za-z])[A-Za-z]*+\d[0-9A-Za-z]*+/',
     ];
 
     public function normalize(string $message): string
