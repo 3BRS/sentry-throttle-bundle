@@ -10,7 +10,9 @@ final class BundleBootTest extends IntegrationTestCase
 {
     public function testKernelBootsWithBundle(): void
     {
-        $bundles = $this->bootKernel()->getParameter('kernel.bundles');
+        $bundles = $this->bootKernel([
+            'enabled' => false,
+        ])->getParameter('kernel.bundles');
 
         $this->assertIsArray($bundles);
         $this->assertSame(ThreeBRSSentryThrottleBundle::class, $bundles['ThreeBRSSentryThrottleBundle'] ?? null);
