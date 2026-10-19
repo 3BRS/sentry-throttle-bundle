@@ -69,7 +69,7 @@
         "test-integration": "phpunit --testsuite=\"Integration Tests\"",
         "ecs": "ecs check",
         "ecs-fix": "ecs check --fix",
-        "phpstan": "phpstan analyse",
+        "phpstan": "phpstan analyse --memory-limit=512M",
         "deptrac": "@php -d error_reporting='E_ALL & ~E_DEPRECATED' vendor/bin/deptrac analyse --cache-file=var/cache/deptrac.cache",
         "rector": "rector process --dry-run",
         "rector-fix": "rector process"
