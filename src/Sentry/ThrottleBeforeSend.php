@@ -19,6 +19,9 @@ final class ThrottleBeforeSend
      */
     private const FAIL_OPEN_LOGGER = 'monolog.' . Throttle::LOG_CHANNEL;
 
+    /**
+     * @internal the service is the public API, get it from the container
+     */
     public function __construct(
         private readonly ThrottleInterface $throttle,
         private readonly EventFingerprinter $fingerprinter,
