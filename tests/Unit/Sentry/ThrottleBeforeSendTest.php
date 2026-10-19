@@ -10,6 +10,7 @@ use Sentry\Event;
 use ThreeBRS\SentryThrottleBundle\Fingerprint\Fingerprinter;
 use ThreeBRS\SentryThrottleBundle\Sentry\EventFingerprinter;
 use ThreeBRS\SentryThrottleBundle\Sentry\ThrottleBeforeSend;
+use ThreeBRS\SentryThrottleBundle\Tests\Unit\Throttle\ThrottleSpy;
 use ThreeBRS\SentryThrottleBundle\Throttle\Decision;
 
 #[RequiresMethod(Event::class, 'createEvent')]

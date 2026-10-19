@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace ThreeBRS\SentryThrottleBundle\DependencyInjection;
 
+use Monolog\Handler\HandlerInterface;
 use Predis\Client;
 use Sentry\Event;
 use Symfony\Component\Config\Definition\Exception\InvalidConfigurationException;
 use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\Argument\ServiceClosureArgument;
+use Symfony\Component\DependencyInjection\ChildDefinition;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Extension\Extension;
 use Symfony\Component\DependencyInjection\Loader\PhpFileLoader;
@@ -27,6 +29,8 @@ final class ThreeBRSSentryThrottleExtension extends Extension
 
     public const EVENT_FINGERPRINTER = 'three_brs_sentry_throttle.sentry.event_fingerprinter';
 
+    public const MONOLOG_HANDLER = 'three_brs_sentry_throttle.monolog.throttling_handler';
+
     public function getAlias(): string
     {
         return 'three_brs_sentry_throttle';
@@ -37,7 +41,7 @@ final class ThreeBRSSentryThrottleExtension extends Extension
      */
     public function load(array $configs, ContainerBuilder $container): void
     {
-        /** @var array{enabled: bool|string, prefix: ?string, redis: array{dsn: ?string, service: ?string, timeout: float|int|string, read_timeout: float|int|string}, window: int|string, per_fingerprint: int|string, max_per_window: int|string, fallback_max_per_window: int|string} $config */
+        /** @var array{enabled: bool|string, prefix: ?string, redis: array{dsn: ?string, service: ?string, timeout: float|int|string, read_timeout: float|int|string}, monolog: array{handlers: list<string>, tags: string}, window: int|string, per_fingerprint: int|string, max_per_window: int|string, fallback_max_per_window: int|string} $config */
         $config = $this->processConfiguration(new Configuration(), $configs);
 
         if (! \is_bool($config['enabled'])) {
@@ -49,6 +53,10 @@ final class ThreeBRSSentryThrottleExtension extends Extension
 
         if (class_exists(Event::class)) {
             $loader->load('sentry.php');
+        }
+
+        if ($config['monolog']['handlers'] !== []) {
+            $this->wrapMonologHandlers($config['monolog'], $loader, $container);
         }
 
         if (! $config['enabled']) {
@@ -67,6 +75,26 @@ final class ThreeBRSSentryThrottleExtension extends Extension
             ->setArgument('$fallbackMaxPerWindow', $config['fallback_max_per_window']);
 
         $this->configureRedisClient($config['redis'], $container);
+    }
+
+    /**
+     * @param array{handlers: list<string>, tags: string} $monolog
+     */
+    private function wrapMonologHandlers(array $monolog, PhpFileLoader $loader, ContainerBuilder $container): void
+    {
+        if (! interface_exists(HandlerInterface::class)) {
+            throw new InvalidConfigurationException('"three_brs_sentry_throttle.monolog.handlers" needs the "monolog/monolog" package.');
+        }
+
+        $loader->load('monolog.php');
+
+        foreach (array_unique($monolog['handlers']) as $handler) {
+            $id = self::MONOLOG_HANDLER . '.' . $handler;
+            $container->setDefinition($id, new ChildDefinition(self::MONOLOG_HANDLER))
+                ->setDecoratedService($handler)
+                ->setArgument('$handler', new Reference($id . '.inner'))
+                ->setArgument('$tagsIn', $monolog['tags']);
+        }
     }
 
     /**

@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\DependencyInjection;
 
+use Monolog\Logger;
 use PHPUnit\Framework\Attributes\RequiresMethod;
 use PHPUnit\Framework\TestCase;
 use Sentry\Event;
 use Symfony\Component\DependencyInjection\Argument\ServiceClosureArgument;
+use Symfony\Component\DependencyInjection\ChildDefinition;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\DependencyInjection\Reference;
@@ -135,6 +137,47 @@ final class ThreeBRSSentryThrottleExtensionTest extends TestCase
         $this->assertContains(ThreeBRSSentryThrottleExtension::THROTTLE, $services);
         $this->assertNotContains(ThrottleBeforeSend::class, $services);
         $this->assertNotContains(ThreeBRSSentryThrottleExtension::EVENT_FINGERPRINTER, $services);
+    }
+
+    #[RequiresMethod(Logger::class, 'pushHandler')]
+    public function testWrapsConfiguredMonologHandlers(): void
+    {
+        $container = $this->load([
+            'prefix' => 'app',
+            'redis' => 'redis://localhost',
+            'monolog' => [
+                'handlers' => ['app.sentry_handler', 'app.sentry_handler'],
+                'tags' => 'extra',
+            ],
+        ]);
+        $id = ThreeBRSSentryThrottleExtension::MONOLOG_HANDLER . '.app.sentry_handler';
+
+        $decorator = $container->getDefinition($id);
+        $this->assertInstanceOf(ChildDefinition::class, $decorator);
+        $this->assertSame(ThreeBRSSentryThrottleExtension::MONOLOG_HANDLER, $decorator->getParent());
+        $this->assertSame(['app.sentry_handler', null, 0], $decorator->getDecoratedService());
+        $this->assertEquals([
+            '$handler' => new Reference($id . '.inner'),
+            '$tagsIn' => 'extra',
+        ], $decorator->getArguments());
+        $this->assertCount(1, array_filter(array_keys($container->getDefinitions()), static fn (string $service): bool => str_starts_with($service, ThreeBRSSentryThrottleExtension::MONOLOG_HANDLER . '.')));
+    }
+
+    public function testDoesNotWrapMonologHandlersByDefault(): void
+    {
+        $this->assertFalse($this->load([
+            'enabled' => false,
+        ])->hasDefinition(ThreeBRSSentryThrottleExtension::MONOLOG_HANDLER));
+    }
+
+    public function testRequiresMonologForWrappedHandlers(): void
+    {
+        $this->assertSame('"three_brs_sentry_throttle.monolog.handlers" needs the "monolog/monolog" package.', $this->loadInSeparateProcess([
+            'enabled' => false,
+            'monolog' => [
+                'handlers' => ['app.sentry_handler'],
+            ],
+        ], ['Monolog\\']));
     }
 
     public function testRequiresRedisClientForDsn(): void

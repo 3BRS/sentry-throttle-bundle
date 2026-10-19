@@ -26,6 +26,10 @@ final class ConfigurationTest extends TestCase
             'timeout' => 0.2,
             'read_timeout' => 0.2,
         ], $config['redis']);
+        $this->assertSame([
+            'handlers' => [],
+            'tags' => 'context',
+        ], $config['monolog']);
         $this->assertSame(60, $config['window']);
         $this->assertSame(50, $config['per_fingerprint']);
         $this->assertSame(300, $config['max_per_window']);
@@ -59,6 +63,16 @@ final class ConfigurationTest extends TestCase
         // Kept as integers; PHP converts them to float when they are passed to RedisConnectionFactory.
         $this->assertSame(1, $config['redis']['timeout']);
         $this->assertSame(2, $config['redis']['read_timeout']);
+    }
+
+    public function testAcceptsSingleMonologHandler(): void
+    {
+        $this->assertSame(['app.sentry_handler'], $this->process([
+            'enabled' => false,
+            'monolog' => [
+                'handlers' => 'app.sentry_handler',
+            ],
+        ])['monolog']['handlers']);
     }
 
     public function testDisabledThrottleNeedsNeitherPrefixNorRedis(): void
@@ -107,6 +121,11 @@ final class ConfigurationTest extends TestCase
                 'service' => '',
             ],
         ] + $valid, 'The path "three_brs_sentry_throttle.redis.service" cannot contain an empty value'];
+        yield 'unknown tag field' => [[
+            'monolog' => [
+                'tags' => 'tags',
+            ],
+        ] + $valid, 'The value "tags" is not allowed for path "three_brs_sentry_throttle.monolog.tags"'];
         yield 'dsn and service' => [[
             'redis' => [
                 'dsn' => 'redis://localhost',

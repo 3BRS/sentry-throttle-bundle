@@ -40,6 +40,7 @@ final class Configuration implements ConfigurationInterface
             ->defaultNull()
             ->end()
             ->append($this->redisNode())
+            ->append($this->monologNode())
             ->integerNode('window')
             ->info('Window length in seconds, at least 1.')
             ->defaultValue(60)
@@ -83,6 +84,34 @@ final class Configuration implements ConfigurationInterface
                 throw new \InvalidArgumentException(\sprintf('"redis.%s" must be greater than 0.', $option));
             }
         }
+    }
+
+    private function monologNode(): ArrayNodeDefinition
+    {
+        $node = (new TreeBuilder('monolog'))->getRootNode();
+
+        $node
+            ->info('For applications that send to Sentry through their own Monolog handler, without the Sentry SDK.')
+            ->addDefaultsIfNotSet()
+            ->children()
+            ->arrayNode('handlers')
+            ->info('Ids of the Monolog handler services that send to Sentry; each of them is wrapped by the throttle.')
+            ->beforeNormalization()
+            ->castToArray()
+            ->end()
+            ->scalarPrototype()
+            ->cannotBeEmpty()
+            ->end()
+            ->defaultValue([])
+            ->end()
+            ->enumNode('tags')
+            ->info('Record field the wrapped handler reads Sentry tags from.')
+            ->values(['context', 'extra'])
+            ->defaultValue('context')
+            ->end()
+            ->end();
+
+        return $node;
     }
 
     private function redisNode(): ArrayNodeDefinition

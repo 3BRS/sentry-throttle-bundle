@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\Sentry;
+namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\Throttle;
 
 use ThreeBRS\SentryThrottleBundle\Throttle\Decision;
 use ThreeBRS\SentryThrottleBundle\Throttle\ThrottleInterface;
