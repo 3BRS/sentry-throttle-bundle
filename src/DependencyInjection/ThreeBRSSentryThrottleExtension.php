@@ -5,17 +5,15 @@ declare(strict_types=1);
 namespace ThreeBRS\SentryThrottleBundle\DependencyInjection;
 
 use Predis\Client;
+use Sentry\Event;
 use Symfony\Component\Config\Definition\Exception\InvalidConfigurationException;
+use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\Argument\ServiceClosureArgument;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
-use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\DependencyInjection\Extension\Extension;
+use Symfony\Component\DependencyInjection\Loader\PhpFileLoader;
 use Symfony\Component\DependencyInjection\Reference;
-use ThreeBRS\SentryThrottleBundle\Fingerprint\Fingerprinter;
-use ThreeBRS\SentryThrottleBundle\Storage\LazyRedisStorage;
-use ThreeBRS\SentryThrottleBundle\Storage\RedisConnectionFactory;
 use ThreeBRS\SentryThrottleBundle\Throttle\DisabledThrottle;
-use ThreeBRS\SentryThrottleBundle\Throttle\Throttle;
 
 final class ThreeBRSSentryThrottleExtension extends Extension
 {
@@ -27,7 +25,7 @@ final class ThreeBRSSentryThrottleExtension extends Extension
 
     public const REDIS = 'three_brs_sentry_throttle.redis';
 
-    public const LOG_CHANNEL = 'sentry_throttle';
+    public const EVENT_FINGERPRINTER = 'three_brs_sentry_throttle.sentry.event_fingerprinter';
 
     public function getAlias(): string
     {
@@ -46,40 +44,42 @@ final class ThreeBRSSentryThrottleExtension extends Extension
             throw new InvalidConfigurationException('"three_brs_sentry_throttle.enabled" cannot come from an environment variable, it decides which services are registered; use when@dev / when@test.');
         }
 
-        $container->register(self::FINGERPRINTER, Fingerprinter::class)
-            ->setArguments(['%kernel.project_dir%']);
+        $loader = new PhpFileLoader($container, new FileLocator(__DIR__ . '/../Resources/config'));
+        $loader->load('services.php');
+
+        if (class_exists(Event::class)) {
+            $loader->load('sentry.php');
+        }
 
         if (! $config['enabled']) {
             $container->register(self::THROTTLE, DisabledThrottle::class);
+            $container->removeDefinition(self::STORAGE);
+            $container->removeDefinition(self::REDIS);
 
             return;
         }
 
-        $container->register(self::STORAGE, LazyRedisStorage::class)
-            ->setArguments([new ServiceClosureArgument($this->registerRedisClient($config['redis'], $container))]);
+        $container->getDefinition(self::THROTTLE)
+            ->setArgument('$prefix', $config['prefix'])
+            ->setArgument('$windowSeconds', $config['window'])
+            ->setArgument('$perFingerprint', $config['per_fingerprint'])
+            ->setArgument('$maxPerWindow', $config['max_per_window'])
+            ->setArgument('$fallbackMaxPerWindow', $config['fallback_max_per_window']);
 
-        $container->register(self::THROTTLE, Throttle::class)
-            ->setArguments([
-                new Reference(self::STORAGE),
-                $config['prefix'],
-                $config['window'],
-                $config['per_fingerprint'],
-                $config['max_per_window'],
-                $config['fallback_max_per_window'],
-                new Reference('logger', ContainerInterface::NULL_ON_INVALID_REFERENCE),
-            ])
-            ->addTag('monolog.logger', [
-                'channel' => self::LOG_CHANNEL,
-            ]);
+        $this->configureRedisClient($config['redis'], $container);
     }
 
     /**
      * @param array{dsn: ?string, service: ?string, timeout: float|int|string, read_timeout: float|int|string} $redis
      */
-    private function registerRedisClient(array $redis, ContainerBuilder $container): Reference
+    private function configureRedisClient(array $redis, ContainerBuilder $container): void
     {
         if ($redis['service'] !== null) {
-            return new Reference($redis['service']);
+            $container->removeDefinition(self::REDIS);
+            $container->getDefinition(self::STORAGE)
+                ->setArgument('$client', new ServiceClosureArgument(new Reference($redis['service'])));
+
+            return;
         }
 
         $phpRedis = \extension_loaded('redis');
@@ -88,11 +88,8 @@ final class ThreeBRSSentryThrottleExtension extends Extension
             throw new InvalidConfigurationException('"three_brs_sentry_throttle.redis.dsn" needs the "redis" PHP extension or the "predis/predis" package.');
         }
 
-        // The class only describes the service; RedisConnectionFactory picks the client.
-        $container->register(self::REDIS, $phpRedis ? \Redis::class : Client::class)
-            ->setFactory([RedisConnectionFactory::class, 'create'])
+        $container->getDefinition(self::REDIS)
+            ->setClass($phpRedis ? \Redis::class : Client::class)
             ->setArguments([$redis['dsn'], $redis['timeout'], $redis['read_timeout']]);
-
-        return new Reference(self::REDIS);
     }
 }

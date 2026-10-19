@@ -186,6 +186,7 @@ final class ThrottleTest extends TestCase
         $this->assertCount(2, $this->logs);
         [$message, $context] = $this->logs[0];
         $this->assertStringContainsString('{limit}', $message);
+        $this->assertSame('app', $context['prefix']);
         $this->assertSame(50, $context['limit']);
         $this->assertSame(60, $context['window']);
         $this->assertSame('Connection refused', $context['error']);

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\DependencyInjection;
 
+use PHPUnit\Framework\Attributes\RequiresMethod;
 use PHPUnit\Framework\TestCase;
+use Sentry\Event;
 use Symfony\Component\DependencyInjection\Argument\ServiceClosureArgument;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -12,6 +14,7 @@ use Symfony\Component\DependencyInjection\Reference;
 use ThreeBRS\SentryThrottleBundle\DependencyInjection\Configuration;
 use ThreeBRS\SentryThrottleBundle\DependencyInjection\ThreeBRSSentryThrottleExtension;
 use ThreeBRS\SentryThrottleBundle\Fingerprint\Fingerprinter;
+use ThreeBRS\SentryThrottleBundle\Sentry\ThrottleBeforeSend;
 use ThreeBRS\SentryThrottleBundle\Storage\LazyRedisStorage;
 use ThreeBRS\SentryThrottleBundle\Storage\RedisConnectionFactory;
 use ThreeBRS\SentryThrottleBundle\Throttle\DisabledThrottle;
@@ -32,13 +35,13 @@ final class ThreeBRSSentryThrottleExtensionTest extends TestCase
 
         $this->assertSame(Throttle::class, $throttle->getClass());
         $this->assertEquals([
-            new Reference(ThreeBRSSentryThrottleExtension::STORAGE),
-            'app',
-            30,
-            5,
-            10,
-            3,
-            new Reference('logger', ContainerInterface::NULL_ON_INVALID_REFERENCE),
+            '$storage' => new Reference(ThreeBRSSentryThrottleExtension::STORAGE),
+            '$prefix' => 'app',
+            '$windowSeconds' => 30,
+            '$perFingerprint' => 5,
+            '$maxPerWindow' => 10,
+            '$fallbackMaxPerWindow' => 3,
+            '$logger' => new Reference('logger', ContainerInterface::NULL_ON_INVALID_REFERENCE),
         ], $throttle->getArguments());
         $this->assertSame([[
             'channel' => 'sentry_throttle',
@@ -62,7 +65,7 @@ final class ThreeBRSSentryThrottleExtensionTest extends TestCase
         $storage = $container->getDefinition(ThreeBRSSentryThrottleExtension::STORAGE);
         $this->assertSame(LazyRedisStorage::class, $storage->getClass());
         $this->assertEquals([
-            new ServiceClosureArgument(new Reference(ThreeBRSSentryThrottleExtension::REDIS)),
+            '$client' => new ServiceClosureArgument(new Reference(ThreeBRSSentryThrottleExtension::REDIS)),
         ], $storage->getArguments());
 
         $redis = $container->getDefinition(ThreeBRSSentryThrottleExtension::REDIS);
@@ -80,7 +83,7 @@ final class ThreeBRSSentryThrottleExtensionTest extends TestCase
         ]);
 
         $this->assertEquals([
-            new ServiceClosureArgument(new Reference('app.redis')),
+            '$client' => new ServiceClosureArgument(new Reference('app.redis')),
         ], $container->getDefinition(ThreeBRSSentryThrottleExtension::STORAGE)->getArguments());
         $this->assertFalse($container->hasDefinition(ThreeBRSSentryThrottleExtension::REDIS));
     }
@@ -106,17 +109,59 @@ final class ThreeBRSSentryThrottleExtensionTest extends TestCase
         $this->assertSame(['%kernel.project_dir%'], $fingerprinter->getArguments());
     }
 
+    #[RequiresMethod(Event::class, 'createEvent')]
+    public function testRegistersSentryBeforeSend(): void
+    {
+        $container = $this->load([
+            'enabled' => false,
+        ]);
+
+        $this->assertEquals([
+            new Reference(ThreeBRSSentryThrottleExtension::THROTTLE),
+            new Reference(ThreeBRSSentryThrottleExtension::EVENT_FINGERPRINTER),
+        ], $container->getDefinition(ThrottleBeforeSend::class)->getArguments());
+        $this->assertEquals([
+            new Reference(ThreeBRSSentryThrottleExtension::FINGERPRINTER),
+        ], $container->getDefinition(ThreeBRSSentryThrottleExtension::EVENT_FINGERPRINTER)->getArguments());
+    }
+
+    public function testDoesNotRegisterSentryServicesWithoutSentrySdk(): void
+    {
+        $services = explode("\n", $this->loadInSeparateProcess([
+            'prefix' => 'app',
+            'redis' => 'redis://localhost',
+        ], ['Sentry\\']));
+
+        $this->assertContains(ThreeBRSSentryThrottleExtension::THROTTLE, $services);
+        $this->assertNotContains(ThrottleBeforeSend::class, $services);
+        $this->assertNotContains(ThreeBRSSentryThrottleExtension::EVENT_FINGERPRINTER, $services);
+    }
+
     public function testRequiresRedisClientForDsn(): void
     {
-        $process = proc_open([\PHP_BINARY, '-n', __DIR__ . '/load-without-redis-client.php'], [
+        $this->assertSame('"three_brs_sentry_throttle.redis.dsn" needs the "redis" PHP extension or the "predis/predis" package.', $this->loadInSeparateProcess([
+            'prefix' => 'app',
+            'redis' => 'redis://localhost',
+        ], ['Predis\\'], withoutPhpIni: true));
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     * @param list<string> $hiddenNamespaces
+     */
+    private function loadInSeparateProcess(array $config, array $hiddenNamespaces, bool $withoutPhpIni = false): string
+    {
+        $command = [\PHP_BINARY, ...($withoutPhpIni ? ['-n'] : []), __DIR__ . '/load-extension.php', json_encode($config, \JSON_THROW_ON_ERROR), ...$hiddenNamespaces];
+        $process = proc_open($command, [
             1 => ['pipe', 'w'],
         ], $pipes);
         $this->assertIsResource($process);
         $output = stream_get_contents($pipes[1]);
         fclose($pipes[1]);
         proc_close($process);
+        $this->assertIsString($output);
 
-        $this->assertSame('"three_brs_sentry_throttle.redis.dsn" needs the "redis" PHP extension or the "predis/predis" package.', $output);
+        return $output;
     }
 
     /**
