@@ -37,11 +37,12 @@ final class MessageNormalizerTest extends TestCase
         yield 'empty' => ['', ''];
     }
 
-    public function testNormalizesOnlyTheMessagePrefix(): void
+    public function testUsesFirst8KbOfMessage(): void
     {
         $normalizer = new MessageNormalizer();
-        $prefix = str_repeat('x', 10_000);
+        $prefix = str_repeat('x', 8191);
 
-        $this->assertSame($normalizer->normalize($prefix . 'a'), $normalizer->normalize($prefix . 'b'));
+        $this->assertNotSame($normalizer->normalize($prefix . 'a'), $normalizer->normalize($prefix . 'b'));
+        $this->assertSame($normalizer->normalize($prefix . 'ab'), $normalizer->normalize($prefix . 'ac'));
     }
 }

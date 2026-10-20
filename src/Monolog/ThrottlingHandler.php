@@ -54,7 +54,8 @@ final class ThrottlingHandler extends HandlerWrapper
     }
 
     /**
-     * For a dropped record handle() returns what the wrapped handler returns after handling one: whether to stop bubbling.
+     * For a dropped record handle() returns what an AbstractHandler returns after handling one: whether it stops
+     * bubbling. Other handlers have no getter for it, so the record bubbles.
      */
     private function droppedRecordResult(): bool
     {

@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Config\Definition\Exception\InvalidConfigurationException;
 use Symfony\Component\Config\Definition\Processor;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
 use ThreeBRS\SentryThrottleBundle\DependencyInjection\Configuration;
 
 final class ConfigurationTest extends TestCase
@@ -34,6 +35,47 @@ final class ConfigurationTest extends TestCase
         $this->assertSame(50, $config['per_fingerprint']);
         $this->assertSame(300, $config['max_per_window']);
         $this->assertSame(50, $config['fallback_max_per_window']);
+    }
+
+    #[DataProvider('redisStrings')]
+    public function testRedisStringIsDsnOrServiceId(string $redis, string $option): void
+    {
+        $config = $this->process([
+            'prefix' => 'app',
+            'redis' => $redis,
+        ]);
+
+        $this->assertSame($redis, $config['redis'][$option]);
+        $this->assertNull($config['redis'][$option === 'dsn' ? 'service' : 'dsn']);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function redisStrings(): iterable
+    {
+        yield 'redis DSN' => ['redis://localhost:6379', 'dsn'];
+        yield 'TLS DSN' => ['rediss://localhost:6380', 'dsn'];
+        yield 'DSN without host' => ['redis:?host[localhost]&host[localhost:6380]', 'dsn'];
+        yield 'Valkey DSN' => ['valkey://localhost', 'dsn'];
+        yield 'service id' => ['app.redis', 'service'];
+        yield 'service id with underscore' => ['app.redis_cache', 'service'];
+        yield 'class name as service id' => ['App\\Redis\\Client', 'service'];
+    }
+
+    public function testRedisStringFromEnvironmentVariableIsDsn(): void
+    {
+        $container = new ContainerBuilder();
+        $dsn = $container->getParameter('env(SENTRY_THROTTLE_REDIS_DSN)');
+        $this->assertIsString($dsn);
+
+        $config = $this->process([
+            'prefix' => 'app',
+            'redis' => $dsn,
+        ], $container);
+
+        $this->assertSame($dsn, $config['redis']['dsn']);
+        $this->assertNull($config['redis']['service']);
     }
 
     public function testAcceptsExistingRedisService(): void
@@ -113,8 +155,13 @@ final class ConfigurationTest extends TestCase
         yield 'missing redis' => [[
             'prefix' => 'app',
         ], '"redis" must be set when the throttle is enabled.'];
-        yield 'empty dsn' => [[
+        yield 'empty redis' => [[
             'redis' => '',
+        ] + $valid, 'The path "three_brs_sentry_throttle.redis.service" cannot contain an empty value'];
+        yield 'empty dsn' => [[
+            'redis' => [
+                'dsn' => '',
+            ],
         ] + $valid, 'The path "three_brs_sentry_throttle.redis.dsn" cannot contain an empty value'];
         yield 'empty service' => [[
             'redis' => [
@@ -157,8 +204,8 @@ final class ConfigurationTest extends TestCase
      *
      * @return array<string, mixed>
      */
-    private function process(array $config): array
+    private function process(array $config, ContainerBuilder $container = new ContainerBuilder()): array
     {
-        return (new Processor())->processConfiguration(new Configuration(), [$config]);
+        return (new Processor())->processConfiguration(new Configuration($container), [$config]);
     }
 }

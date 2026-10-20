@@ -7,7 +7,8 @@ namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\Throttle;
 use ThreeBRS\SentryThrottleBundle\Storage\StorageInterface;
 
 /**
- * Counters in memory; TTLs are ignored because window keys change with the window.
+ * Counters in memory; TTLs are ignored because window keys change with the window. $calls counts transactions,
+ * i.e. round trips.
  */
 final class ArrayStorage implements StorageInterface
 {
@@ -25,20 +26,23 @@ final class ArrayStorage implements StorageInterface
      */
     public ?\Closure $onCall = null;
 
-    public function increment(string $key, int $ttlSeconds): int
+    public function run(array $operations): array
     {
         $this->call();
+        $results = [];
 
-        return $this->counters[$key] = ($this->counters[$key] ?? 0) + 1;
-    }
+        foreach ($operations as $operation) {
+            if ($operation->take) {
+                $results[] = $this->counters[$operation->key] ?? 0;
+                unset($this->counters[$operation->key]);
 
-    public function pull(string $key): int
-    {
-        $this->call();
-        $value = $this->counters[$key] ?? 0;
-        unset($this->counters[$key]);
+                continue;
+            }
 
-        return $value;
+            $results[] = $this->counters[$operation->key] = ($this->counters[$operation->key] ?? 0) + $operation->amount;
+        }
+
+        return $results;
     }
 
     private function call(): void

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ThreeBRS\SentryThrottleBundle\Storage;
 
 use Predis\ClientInterface;
+use Symfony\Component\Cache\Traits\RedisProxy;
 
 /**
  * Gets the Redis client on first use; a failed attempt is repeated on the next call.
@@ -17,20 +18,17 @@ final class LazyRedisStorage implements StorageInterface
 
     /**
      * @param \Closure(): object $client
+     * @param bool $sharedClient whether the client is a service the application uses too
      */
     public function __construct(
         private readonly \Closure $client,
+        private readonly bool $sharedClient = false,
     ) {
     }
 
-    public function increment(string $key, int $ttlSeconds): int
+    public function run(array $operations): array
     {
-        return $this->storage()->increment($key, $ttlSeconds);
-    }
-
-    public function pull(string $key): int
-    {
-        return $this->storage()->pull($key);
+        return $this->storage()->run($operations);
     }
 
     private function storage(): StorageInterface
@@ -42,8 +40,8 @@ final class LazyRedisStorage implements StorageInterface
         $client = ($this->client)();
 
         return $this->storage = match (true) {
-            $client instanceof \Redis => new PhpRedisStorage($client),
-            $client instanceof ClientInterface => new PredisStorage($client),
+            $client instanceof RedisProxy, $client instanceof \Redis => new PhpRedisStorage($client),
+            $client instanceof ClientInterface => $this->sharedClient ? PredisStorage::withOwnConnection($client) : new PredisStorage($client),
             default => throw new StorageException(\sprintf('Unsupported Redis client "%s".', get_debug_type($client))),
         };
     }

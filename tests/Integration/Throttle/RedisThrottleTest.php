@@ -49,6 +49,30 @@ final class RedisThrottleTest extends TestCase
         $this->assertSame(0, $first->decide('a')->droppedSinceLastSent);
     }
 
+    #[DataProvider('clients')]
+    public function testCountersExpireAfterTwoWindowsAndDroppedCountAfterDay(string $query): void
+    {
+        $prefix = $this->prefix();
+        $throttle = $this->throttle($query, $prefix, perFingerprint: 1);
+        $throttle->decide('a');
+        $throttle->decide('a');
+        $redis = RedisConnectionFactory::create($this->dsn(), 1.0, 1.0);
+        $this->assertInstanceOf(\Redis::class, $redis);
+        $keyPrefix = 'sentry_throttle:' . $prefix . ':';
+
+        foreach (['fp:1800000000:a', 'all:1800000000'] as $key) {
+            $ttl = $redis->ttl($keyPrefix . $key);
+            $this->assertIsInt($ttl);
+            $this->assertGreaterThan(60, $ttl);
+            $this->assertLessThanOrEqual(120, $ttl);
+        }
+
+        $ttl = $redis->ttl($keyPrefix . 'dropped:a');
+        $this->assertIsInt($ttl);
+        $this->assertGreaterThan(86_000, $ttl);
+        $this->assertLessThanOrEqual(86_400, $ttl);
+    }
+
     /**
      * @return iterable<string, array{string}>
      */
@@ -59,10 +83,16 @@ final class RedisThrottleTest extends TestCase
         yield 'predis' => ['?class=' . rawurlencode(Client::class)];
     }
 
-    private function throttle(string $query, ?string $prefix = null, int $perFingerprint = 50): Throttle
+    private function dsn(): string
     {
         $dsn = getenv('SENTRY_THROTTLE_TEST_REDIS_DSN');
-        $dsn = (\is_string($dsn) && $dsn !== '' ? $dsn : 'redis://localhost:6379') . $query;
+
+        return \is_string($dsn) && $dsn !== '' ? $dsn : 'redis://localhost:6379';
+    }
+
+    private function throttle(string $query, ?string $prefix = null, int $perFingerprint = 50): Throttle
+    {
+        $dsn = $this->dsn() . $query;
 
         return new Throttle(
             new LazyRedisStorage(static fn (): object => RedisConnectionFactory::create($dsn, 1.0, 1.0)),

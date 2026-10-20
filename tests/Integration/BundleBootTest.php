@@ -4,17 +4,17 @@ declare(strict_types=1);
 
 namespace ThreeBRS\SentryThrottleBundle\Tests\Integration;
 
-use ThreeBRS\SentryThrottleBundle\ThreeBRSSentryThrottleBundle;
+use ThreeBRS\SentryThrottleBundle\DependencyInjection\ThreeBRSSentryThrottleExtension;
+use ThreeBRS\SentryThrottleBundle\Throttle\DisabledThrottle;
 
 final class BundleBootTest extends IntegrationTestCase
 {
-    public function testKernelBootsWithBundle(): void
+    public function testKernelBootsWithThrottleOfBundle(): void
     {
-        $bundles = $this->bootKernel([
+        $container = $this->bootKernel([
             'enabled' => false,
-        ])->getParameter('kernel.bundles');
+        ]);
 
-        $this->assertIsArray($bundles);
-        $this->assertSame(ThreeBRSSentryThrottleBundle::class, $bundles['ThreeBRSSentryThrottleBundle'] ?? null);
+        $this->assertInstanceOf(DisabledThrottle::class, $container->get(ThreeBRSSentryThrottleExtension::THROTTLE));
     }
 }

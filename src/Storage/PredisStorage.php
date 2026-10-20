@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace ThreeBRS\SentryThrottleBundle\Storage;
 
+use Predis\Client;
 use Predis\ClientInterface;
+use Predis\Connection\Aggregate\ClusterInterface as Predis1ClusterInterface;
 use Predis\Connection\Cluster\ClusterInterface;
+use Predis\Connection\NodeConnectionInterface;
 use Predis\Pipeline\Pipeline;
 use Predis\Response\ErrorInterface;
 
@@ -17,59 +20,73 @@ final class PredisStorage implements StorageInterface
     public function __construct(
         private readonly ClientInterface $client,
     ) {
-        if ($client->getConnection() instanceof ClusterInterface) {
+        $connection = $client->getConnection();
+
+        // @phpstan-ignore class.notFound (the interface of Predis 1)
+        if ($connection instanceof ClusterInterface || $connection instanceof Predis1ClusterInterface) {
             throw new StorageException('Redis Cluster is not supported.');
         }
     }
 
-    public function increment(string $key, int $ttlSeconds): int
+    /**
+     * Gives a client of the application its own connection with the same parameters and options, so that its
+     * transactions and WATCH are not affected. Not persistent: that would share its socket. Connections other than
+     * to a single node, e.g. replication, are used as they are.
+     */
+    public static function withOwnConnection(ClientInterface $client): self
     {
-        $replies = $this->transaction(static function (Pipeline $pipeline) use ($key, $ttlSeconds): void {
-            $pipeline->incr($key);
-            $pipeline->expire($key, $ttlSeconds);
-        });
+        $connection = $client->getConnection();
 
-        return $this->integer($replies[0] ?? null, 'INCR');
-    }
+        if (! $connection instanceof NodeConnectionInterface) {
+            return new self($client);
+        }
 
-    public function pull(string $key): int
-    {
-        // INCRBY 0 returns the counter as an integer reply.
-        $replies = $this->transaction(static function (Pipeline $pipeline) use ($key): void {
-            $pipeline->incrby($key, 0);
-            $pipeline->del($key);
-        });
+        $parameters = $connection->getParameters()->toArray();
+        // Predis fills missing parameters from the "parameters" option, where Symfony sets "persistent" too.
+        $parameters['persistent'] = false;
 
-        return $this->integer($replies[0] ?? null, 'INCRBY');
+        return new self(new Client($parameters, $client->getOptions()));
     }
 
     /**
      * MULTI and EXEC inside a plain pipeline take one round trip; Predis transactions wait for every QUEUED reply.
-     *
-     * @param \Closure(Pipeline): void $commands
-     *
-     * @return array<mixed>
      */
-    private function transaction(\Closure $commands): array
+    public function run(array $operations): array
     {
         $pipeline = new Pipeline($this->client);
         $pipeline->multi();
-        $commands($pipeline);
-        $pipeline->exec();
-        $replies = $pipeline->execute();
-        $exec = end($replies);
 
-        if (! \is_array($exec)) {
-            throw new StorageException('Redis transaction failed: ' . ($exec instanceof ErrorInterface ? $exec->getMessage() : 'no reply'));
+        foreach ($operations as $operation) {
+            $pipeline->incrby($operation->key, $operation->amount);
+
+            if ($operation->take) {
+                $pipeline->del($operation->key);
+            } else {
+                $pipeline->expire($operation->key, $operation->ttlSeconds);
+            }
         }
 
-        return $exec;
+        $pipeline->exec();
+        $pipelineReplies = $pipeline->execute();
+        $transactionReplies = end($pipelineReplies);
+
+        if (! \is_array($transactionReplies)) {
+            throw new StorageException('Redis transaction failed: ' . ($transactionReplies instanceof ErrorInterface ? $transactionReplies->getMessage() : 'no reply'));
+        }
+
+        $results = [];
+
+        foreach ($operations as $index => $operation) {
+            $results[] = $this->integer($transactionReplies[2 * $index] ?? null, $operation->key);
+        }
+
+        return $results;
     }
 
-    private function integer(mixed $reply, string $command): int
+    private function integer(mixed $reply, string $key): int
     {
         if (! \is_int($reply)) {
-            throw new StorageException(\sprintf('Redis %s failed: %s', $command, $reply instanceof ErrorInterface ? $reply->getMessage() : 'unexpected reply'));
+            throw new StorageException(\sprintf('Redis command on "%s" failed: %s', $key, $reply instanceof ErrorInterface ? $reply->getMessage() : 'unexpected reply'));
         }
 
         return $reply;

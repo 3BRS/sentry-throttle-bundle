@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\Monolog;
 
 use Monolog\Handler\BufferHandler;
+use Monolog\Handler\GroupHandler;
 use Monolog\Handler\TestHandler;
 use Monolog\Level;
 use Monolog\Logger;
@@ -171,6 +172,20 @@ final class ThrottlingHandlerTest extends TestCase
     {
         yield 'bubbling wrapped handler' => [true, 1];
         yield 'not bubbling wrapped handler' => [false, 0];
+    }
+
+    public function testDroppedRecordBubblesPastHandlerWithoutBubbleGetter(): void
+    {
+        $next = new TestHandler();
+        $logger = new Logger('app', [
+            // A handled record would stop here: GroupHandler does not bubble.
+            new ThrottlingHandler(new GroupHandler([new TestHandler()], false), new ThrottleSpy(Decision::drop()), new Fingerprinter()),
+            $next,
+        ]);
+
+        $logger->error('Import failed');
+
+        $this->assertCount(1, $next->getRecords());
     }
 
     public function testPassesRecordWhenThrottlingFails(): void

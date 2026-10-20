@@ -59,8 +59,10 @@ abstract class IntegrationTestCase extends TestCase
     {
         $this->kernel = new TestKernel($bundleConfig, $bundles, $configure);
         $this->kernel->boot();
+        $container = $this->kernel->getContainer();
+        $this->waitForMiddleOfWindow();
 
-        return $this->kernel->getContainer();
+        return $container;
     }
 
     protected static function redisDsn(): string
@@ -68,6 +70,17 @@ abstract class IntegrationTestCase extends TestCase
         $dsn = getenv('SENTRY_THROTTLE_TEST_REDIS_DSN');
 
         return \is_string($dsn) && $dsn !== '' ? $dsn : 'redis://localhost:6379';
+    }
+
+    /**
+     * The events of a test have to fall into one window of the default 60 seconds. The first second is avoided
+     * too, because the system clock may be set back by a fraction of a second.
+     */
+    private function waitForMiddleOfWindow(): void
+    {
+        while (time() % 60 === 0 || time() % 60 >= 58) {
+            usleep(10_000);
+        }
     }
 
     private function currentErrorHandler(): ?callable

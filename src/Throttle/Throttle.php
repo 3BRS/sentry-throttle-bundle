@@ -6,6 +6,8 @@ namespace ThreeBRS\SentryThrottleBundle\Throttle;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use ThreeBRS\SentryThrottleBundle\Storage\Operation;
+use ThreeBRS\SentryThrottleBundle\Storage\StorageBusyException;
 use ThreeBRS\SentryThrottleBundle\Storage\StorageInterface;
 
 /**
@@ -30,6 +32,15 @@ final class Throttle implements ThrottleInterface
 
     private bool $deciding = false;
 
+    /**
+     * Options out of range, e.g. from environment variables, which are not validated when the container is compiled.
+     *
+     * @var list<string>
+     */
+    private readonly array $invalidOptions;
+
+    private bool $invalidOptionsLogged = false;
+
     private readonly LoggerInterface $logger;
 
     /**
@@ -46,6 +57,13 @@ final class Throttle implements ThrottleInterface
         private readonly ?\Closure $clock = null,
     ) {
         $this->logger = $logger ?? new NullLogger();
+        $this->invalidOptions = array_keys(array_filter([
+            'prefix' => $prefix === '',
+            'window' => $windowSeconds < 1,
+            'per_fingerprint' => $perFingerprint < 1,
+            'max_per_window' => $maxPerWindow < 1,
+            'fallback_max_per_window' => $fallbackMaxPerWindow < 1,
+        ]));
     }
 
     public function decide(string $fingerprint): Decision
@@ -58,6 +76,10 @@ final class Throttle implements ThrottleInterface
         $this->deciding = true;
 
         try {
+            if ($this->invalidOptions !== []) {
+                return $this->sendWithInvalidOptions();
+            }
+
             $window = $this->currentWindow();
 
             if ($this->failedWindow === $window) {
@@ -66,6 +88,9 @@ final class Throttle implements ThrottleInterface
 
             try {
                 return $this->decideWithStorage($fingerprint, $window);
+            } catch (StorageBusyException) {
+                // Not a failure: only this event is decided without the storage.
+                return $this->fallback($window);
             } catch (\Throwable $e) {
                 $this->failedWindow = $window;
                 $decision = $this->fallback($window);
@@ -73,7 +98,7 @@ final class Throttle implements ThrottleInterface
                     'prefix' => $this->prefix,
                     'limit' => $this->fallbackMaxPerWindow,
                     'window' => $this->windowSeconds,
-                    'error' => $e->getMessage(),
+                    'error' => $this->withoutCredentials($e->getMessage()),
                     'error_class' => $e::class,
                 ]);
 
@@ -89,23 +114,45 @@ final class Throttle implements ThrottleInterface
     private function decideWithStorage(string $fingerprint, int $window): Decision
     {
         $keyPrefix = self::KEY_PREFIX . $this->prefix . ':';
+        $globalKey = $keyPrefix . 'all:' . $window;
         $droppedKey = $keyPrefix . 'dropped:' . $fingerprint;
-        // Each increment renews the TTL, so a key outlives its window by at least one window.
+        // Every operation renews the TTL, so a key outlives its window by at least one window.
         $windowTtl = 2 * $this->windowSeconds;
 
-        if ($this->storage->increment($keyPrefix . 'fp:' . $window . ':' . $fingerprint, $windowTtl) > $this->perFingerprint) {
-            $this->storage->increment($droppedKey, self::DROPPED_TTL_SECONDS);
+        $fingerprintKey = $keyPrefix . 'fp:' . $window . ':' . $fingerprint;
 
-            return Decision::drop();
+        [$fingerprintCount, $globalCount, $dropped] = $this->storage->run([
+            Operation::add($fingerprintKey, 1, $windowTtl),
+            Operation::add($globalKey, 1, $windowTtl),
+            Operation::take($droppedKey),
+        ]);
+
+        if ($fingerprintCount <= $this->perFingerprint && $globalCount <= $this->maxPerWindow) {
+            return Decision::send($dropped);
         }
 
-        if ($this->storage->increment($keyPrefix . 'all:' . $window, $windowTtl) > $this->maxPerWindow) {
-            $this->storage->increment($droppedKey, self::DROPPED_TTL_SECONDS);
+        // A dropped event puts back the dropped count it took, plus one for itself, and takes itself off both
+        // window counters, so that they count only sent events.
+        $this->storage->run([
+            Operation::add($droppedKey, $dropped + 1, self::DROPPED_TTL_SECONDS),
+            Operation::add($fingerprintKey, -1, $windowTtl),
+            Operation::add($globalKey, -1, $windowTtl),
+        ]);
 
-            return Decision::drop();
+        return Decision::drop();
+    }
+
+    private function sendWithInvalidOptions(): Decision
+    {
+        if (! $this->invalidOptionsLogged) {
+            $this->invalidOptionsLogged = true;
+            $this->logger->warning('Sentry throttle sends every event because these options are out of range: {options}.', [
+                'prefix' => $this->prefix,
+                'options' => implode(', ', $this->invalidOptions),
+            ]);
         }
 
-        return Decision::send($this->storage->pull($droppedKey));
+        return Decision::send();
     }
 
     private function fallback(int $window): Decision
@@ -116,6 +163,15 @@ final class Throttle implements ThrottleInterface
         }
 
         return ++$this->fallbackCount <= $this->fallbackMaxPerWindow ? Decision::send() : Decision::drop();
+    }
+
+    /**
+     * Older symfony/cache versions put the whole DSN, password included, into their exception messages. The password
+     * is the user info of the DSN or, for Redis Sentinel, the "auth" query parameter.
+     */
+    private function withoutCredentials(string $message): string
+    {
+        return preg_replace(['#(rediss?:(?://)?)[^@]*+@#', '#([?&]auth=)[^&"\s]*+#'], ['$1***@', '$1***'], $message) ?? '';
     }
 
     private function currentWindow(): int
