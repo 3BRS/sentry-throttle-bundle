@@ -33,7 +33,7 @@ update: ## Update composer dependencies
 	$(PHP) composer update
 
 update-lowest: ## Update composer dependencies to the lowest supported versions
-	$(PHP) composer update --prefer-lowest --prefer-stable
+	$(DOCKER_COMPOSE) exec -e COMPOSER_NO_BLOCKING=1 -e COMPOSER_NO_SECURITY_BLOCKING=1 php composer update --prefer-lowest --prefer-stable
 
 test: phpunit ecs phpstan deptrac rector ## Run all checks (PHPUnit, ECS, PHPStan, Deptrac, Rector)
 

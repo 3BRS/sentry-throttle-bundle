@@ -65,15 +65,15 @@ jobs:
 
             -   name: Leave out sentry-symfony
                 if: matrix.job == 'lowest'
-                # Every sentry-symfony 5.x needs Sentry SDK 4.6.1 or later; without it the lowest SDK is 4.0.
+                # Every sentry-symfony 5.x needs Sentry SDK 4.6.1+; without it the lowest SDK is 4.0.
                 run: composer remove --dev --no-update --no-interaction sentry/sentry-symfony
 
-            -   name: Require Symfony 6.0 and Monolog 2.5
+            -   name: Require Symfony 6.0, Monolog 2.5 and Predis 2.0
                 if: matrix.job == 'symfony-6-0'
                 run: |
                     grep -o -E '"symfony/[^"]+"' composer.json | tr -d '"' | grep -v -x 'symfony/monolog-bundle' | sort -u \
                         | xargs printf '%s:6.0.* ' | xargs composer require --no-interaction --no-update
-                    composer require --dev --no-interaction --no-update 'monolog/monolog:2.5.*'
+                    composer require --dev --no-interaction --no-update 'monolog/monolog:2.5.*' 'predis/predis:2.0.*'
 
             -   name: Leave out the Sentry and Monolog packages
                 if: matrix.job == 'without-optional-packages'
@@ -96,6 +96,11 @@ jobs:
 
             -   name: Install the lowest dependencies
                 if: matrix.prefer-lowest
+                env:
+                    # Composer 2.9+ leaves out versions with security advisories, which would raise the lowest versions.
+                    # Composer 2.10+ reads COMPOSER_NO_BLOCKING, 2.9.2+ reads COMPOSER_NO_SECURITY_BLOCKING.
+                    COMPOSER_NO_BLOCKING: "1"
+                    COMPOSER_NO_SECURITY_BLOCKING: "1"
                 run: composer update --no-interaction --no-progress --prefer-lowest --prefer-stable
 
             -   name: PHPUnit

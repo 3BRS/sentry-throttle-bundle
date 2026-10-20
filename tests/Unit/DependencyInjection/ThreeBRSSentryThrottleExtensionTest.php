@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\DependencyInjection;
 
 use Monolog\Logger;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RequiresMethod;
 use PHPUnit\Framework\TestCase;
 use Sentry\Event;
@@ -75,19 +76,47 @@ final class ThreeBRSSentryThrottleExtensionTest extends TestCase
         $this->assertSame(['redis://localhost', 0.2, 0.2], $redis->getArguments());
     }
 
-    public function testUsesExistingRedisClientService(): void
+    public function testCreatesRedisClientFromDsnInEnvironmentVariable(): void
+    {
+        $container = new ContainerBuilder();
+        $dsn = $container->getParameter('env(SENTRY_THROTTLE_REDIS_DSN)');
+        $this->assertIsString($dsn);
+
+        $this->load([
+            'prefix' => 'app',
+            'redis' => $dsn,
+        ], $container);
+
+        $this->assertSame([$dsn, 0.2, 0.2], $container->getDefinition(ThreeBRSSentryThrottleExtension::REDIS)->getArguments());
+    }
+
+    /**
+     * @param string|array{service: string} $redis
+     */
+    #[DataProvider('existingRedisClientServices')]
+    public function testUsesExistingRedisClientService(string|array $redis): void
     {
         $container = $this->load([
             'prefix' => 'app',
-            'redis' => [
-                'service' => 'app.redis',
-            ],
+            'redis' => $redis,
         ]);
 
         $this->assertEquals([
             '$client' => new ServiceClosureArgument(new Reference('app.redis')),
+            '$sharedClient' => true,
         ], $container->getDefinition(ThreeBRSSentryThrottleExtension::STORAGE)->getArguments());
         $this->assertFalse($container->hasDefinition(ThreeBRSSentryThrottleExtension::REDIS));
+    }
+
+    /**
+     * @return iterable<string, array{string|array{service: string}}>
+     */
+    public static function existingRedisClientServices(): iterable
+    {
+        yield 'service id' => ['app.redis'];
+        yield 'service option' => [[
+            'service' => 'app.redis',
+        ]];
     }
 
     public function testRegistersDisabledThrottleWithoutRedis(): void
@@ -210,9 +239,8 @@ final class ThreeBRSSentryThrottleExtensionTest extends TestCase
     /**
      * @param array<string, mixed> $config
      */
-    private function load(array $config): ContainerBuilder
+    private function load(array $config, ContainerBuilder $container = new ContainerBuilder()): ContainerBuilder
     {
-        $container = new ContainerBuilder();
         (new ThreeBRSSentryThrottleExtension())->load([$config], $container);
 
         return $container;

@@ -178,8 +178,15 @@ final class SentryBeforeSendTest extends IntegrationTestCase
         return $container;
     }
 
+    /**
+     * Polls the clock of the throttle: a sleep may end early, and the system clock may be adjusted meanwhile.
+     */
     private function waitForNextSecond(): void
     {
-        usleep((int) ((1 - fmod(microtime(true), 1)) * 1_000_000) + 10_000);
+        $second = time();
+
+        while (time() === $second) {
+            usleep(1_000);
+        }
     }
 }

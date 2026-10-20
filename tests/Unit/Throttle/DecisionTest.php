@@ -6,7 +6,6 @@ namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\Throttle;
 
 use PHPUnit\Framework\TestCase;
 use ThreeBRS\SentryThrottleBundle\Throttle\Decision;
-use ThreeBRS\SentryThrottleBundle\Throttle\DisabledThrottle;
 
 final class DecisionTest extends TestCase
 {
@@ -29,17 +28,5 @@ final class DecisionTest extends TestCase
 
         $this->assertFalse($decision->send);
         $this->assertSame([], $decision->tags());
-    }
-
-    public function testDisabledThrottleSendsEverything(): void
-    {
-        $throttle = new DisabledThrottle();
-        $sends = [];
-
-        for ($i = 0; $i < 1000; ++$i) {
-            $sends[] = $throttle->decide('a')->send;
-        }
-
-        $this->assertNotContains(false, $sends);
     }
 }

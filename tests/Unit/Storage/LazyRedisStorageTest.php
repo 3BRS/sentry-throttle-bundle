@@ -6,6 +6,7 @@ namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\Storage;
 
 use PHPUnit\Framework\TestCase;
 use ThreeBRS\SentryThrottleBundle\Storage\LazyRedisStorage;
+use ThreeBRS\SentryThrottleBundle\Storage\Operation;
 use ThreeBRS\SentryThrottleBundle\Storage\StorageException;
 
 final class LazyRedisStorageTest extends TestCase
@@ -22,7 +23,7 @@ final class LazyRedisStorageTest extends TestCase
         $this->assertSame(0, $calls);
 
         try {
-            $storage->increment('key', 60);
+            $storage->run([Operation::add('key', 1, 60)]);
         } catch (StorageException) {
         }
 
@@ -36,7 +37,7 @@ final class LazyRedisStorageTest extends TestCase
         $this->expectException(StorageException::class);
         $this->expectExceptionMessage('Unsupported Redis client "stdClass".');
 
-        $storage->increment('key', 60);
+        $storage->run([Operation::add('key', 1, 60)]);
     }
 
     public function testRepeatsFailedAttemptToGetClient(): void
@@ -51,12 +52,9 @@ final class LazyRedisStorageTest extends TestCase
         });
         $failures = [];
 
-        foreach ([
-            static fn (): int => $storage->increment('key', 60),
-            static fn (): int => $storage->pull('key'),
-        ] as $call) {
+        foreach ([1, 2] as $attempt) {
             try {
-                $call();
+                $storage->run([Operation::add('key', 1, 60)]);
             } catch (\Throwable $e) {
                 $failures[] = $e::class;
             }

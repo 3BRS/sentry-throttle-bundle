@@ -37,12 +37,20 @@ final class ThreeBRSSentryThrottleExtension extends Extension
     }
 
     /**
+     * @param array<mixed> $config
+     */
+    public function getConfiguration(array $config, ContainerBuilder $container): Configuration
+    {
+        return new Configuration($container);
+    }
+
+    /**
      * @param array<array<string, mixed>> $configs
      */
     public function load(array $configs, ContainerBuilder $container): void
     {
         /** @var array{enabled: bool|string, prefix: ?string, redis: array{dsn: ?string, service: ?string, timeout: float|int|string, read_timeout: float|int|string}, monolog: array{handlers: list<string>, tags: string}, window: int|string, per_fingerprint: int|string, max_per_window: int|string, fallback_max_per_window: int|string} $config */
-        $config = $this->processConfiguration(new Configuration(), $configs);
+        $config = $this->processConfiguration($this->getConfiguration($configs, $container), $configs);
 
         if (! \is_bool($config['enabled'])) {
             throw new InvalidConfigurationException('"three_brs_sentry_throttle.enabled" cannot come from an environment variable, it decides which services are registered; use when@dev / when@test.');
@@ -105,7 +113,8 @@ final class ThreeBRSSentryThrottleExtension extends Extension
         if ($redis['service'] !== null) {
             $container->removeDefinition(self::REDIS);
             $container->getDefinition(self::STORAGE)
-                ->setArgument('$client', new ServiceClosureArgument(new Reference($redis['service'])));
+                ->setArgument('$client', new ServiceClosureArgument(new Reference($redis['service'])))
+                ->setArgument('$sharedClient', true);
 
             return;
         }

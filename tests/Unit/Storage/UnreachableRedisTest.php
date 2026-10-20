@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Predis\Client;
 use ThreeBRS\SentryThrottleBundle\Storage\LazyRedisStorage;
+use ThreeBRS\SentryThrottleBundle\Storage\Operation;
 use ThreeBRS\SentryThrottleBundle\Storage\RedisConnectionFactory;
 
 final class UnreachableRedisTest extends TestCase
@@ -38,6 +39,21 @@ final class UnreachableRedisTest extends TestCase
         $this->assertFailsWithinTimeout('redis://' . $address . $query);
     }
 
+    #[DataProvider('clients')]
+    public function testTimeoutsInDsnOverrideOptions(string $query): void
+    {
+        $server = stream_socket_server('tcp://127.0.0.1:0');
+        $this->assertNotFalse($server);
+        $address = stream_socket_get_name($server, false);
+        $this->assertNotFalse($address);
+        $timeouts = ($query === '' ? '?' : $query . '&') . 'timeout=' . self::TIMEOUT . '&read_timeout=' . self::TIMEOUT;
+
+        // A connect timeout for an address that does not answer, a read timeout for a server that does not reply.
+        foreach (['192.0.2.1:6379', $address] as $target) {
+            $this->assertFailsWithinTimeout('redis://' . $target . $timeouts, timeout: 5.0);
+        }
+    }
+
     /**
      * @return iterable<string, array{string}>
      */
@@ -48,14 +64,14 @@ final class UnreachableRedisTest extends TestCase
         yield 'predis' => ['?class=' . rawurlencode(Client::class)];
     }
 
-    private function assertFailsWithinTimeout(string $dsn): void
+    private function assertFailsWithinTimeout(string $dsn, float $timeout = self::TIMEOUT): void
     {
-        $storage = new LazyRedisStorage(static fn (): object => RedisConnectionFactory::create($dsn, self::TIMEOUT, self::TIMEOUT));
+        $storage = new LazyRedisStorage(static fn (): object => RedisConnectionFactory::create($dsn, $timeout, $timeout));
         $failure = null;
         $start = microtime(true);
 
         try {
-            $storage->increment('key', 60);
+            $storage->run([Operation::add('key', 1, 60)]);
         } catch (\Throwable $failure) {
         }
 

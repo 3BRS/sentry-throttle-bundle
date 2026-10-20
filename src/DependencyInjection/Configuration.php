@@ -7,9 +7,18 @@ namespace ThreeBRS\SentryThrottleBundle\DependencyInjection;
 use Symfony\Component\Config\Definition\Builder\ArrayNodeDefinition;
 use Symfony\Component\Config\Definition\Builder\TreeBuilder;
 use Symfony\Component\Config\Definition\ConfigurationInterface;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
 
 final class Configuration implements ConfigurationInterface
 {
+    /**
+     * @param ContainerBuilder $container tells whether a value comes from an environment variable
+     */
+    public function __construct(
+        private readonly ContainerBuilder $container,
+    ) {
+    }
+
     public function getConfigTreeBuilder(): TreeBuilder
     {
         $treeBuilder = new TreeBuilder('three_brs_sentry_throttle');
@@ -86,6 +95,17 @@ final class Configuration implements ConfigurationInterface
         }
     }
 
+    /**
+     * Same rule as for the providers of Symfony cache pools.
+     */
+    private function isDsn(string $value): bool
+    {
+        $usedEnvs = [];
+        $this->container->resolveEnvPlaceholders($value, null, $usedEnvs);
+
+        return $usedEnvs !== [] || preg_match('#^[a-z]++:#', $value) === 1;
+    }
+
     private function monologNode(): ArrayNodeDefinition
     {
         $node = (new TreeBuilder('monolog'))->getRootNode();
@@ -119,12 +139,12 @@ final class Configuration implements ConfigurationInterface
         $node = (new TreeBuilder('redis'))->getRootNode();
 
         $node
-            ->info('Redis DSN, or the id of an existing Redis client service.')
+            ->info('Redis DSN, or the id of an existing Redis client service. A value from an environment variable or with a scheme (redis://...) is a DSN.')
             ->addDefaultsIfNotSet()
             ->beforeNormalization()
             ->ifString()
-            ->then(static fn (string $dsn): array => [
-                'dsn' => $dsn,
+            ->then(fn (string $redis): array => [
+                $this->isDsn($redis) ? 'dsn' : 'service' => $redis,
             ])
             ->end()
             ->validate()

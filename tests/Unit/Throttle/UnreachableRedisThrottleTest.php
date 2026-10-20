@@ -7,17 +7,22 @@ namespace ThreeBRS\SentryThrottleBundle\Tests\Unit\Throttle;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Predis\Client;
+use Psr\Log\LoggerInterface;
 use ThreeBRS\SentryThrottleBundle\Storage\LazyRedisStorage;
 use ThreeBRS\SentryThrottleBundle\Storage\RedisConnectionFactory;
 use ThreeBRS\SentryThrottleBundle\Throttle\Throttle;
 
 final class UnreachableRedisThrottleTest extends TestCase
 {
+    /**
+     * TEST-NET-1 (RFC 5737) is never routed, so the connection attempt gets no answer.
+     */
+    private const UNREACHABLE_ADDRESS = '192.0.2.1:6379';
+
     #[DataProvider('clients')]
     public function testFailsOpenWithinTimeoutWhenConnectionIsNotAnswered(string $query): void
     {
-        // TEST-NET-1 (RFC 5737) is never routed, so the connection attempt gets no answer.
-        $this->assertFailsOpenWithinTimeout('redis://192.0.2.1:6379' . $query);
+        $this->assertFailsOpenWithinTimeout('redis://' . self::UNREACHABLE_ADDRESS . $query);
     }
 
     #[DataProvider('clients')]
@@ -32,6 +37,23 @@ final class UnreachableRedisThrottleTest extends TestCase
         $this->assertFailsOpenWithinTimeout('redis://' . $address . $query);
     }
 
+    #[DataProvider('clients')]
+    public function testLogsConnectionFailureWithoutRedisPassword(string $query): void
+    {
+        $errors = [];
+        $logger = $this->createStub(LoggerInterface::class);
+        $logger->method('warning')->willReturnCallback(static function (string|\Stringable $message, array $context = []) use (&$errors): void {
+            $errors[] = $context['error'] ?? null;
+        });
+
+        // Older symfony/cache versions put the DSN into the message of the connection error.
+        $this->throttle('redis://secret@' . self::UNREACHABLE_ADDRESS . $query, $logger)->decide('a');
+
+        $this->assertCount(1, $errors);
+        $this->assertIsString($errors[0]);
+        $this->assertStringNotContainsString('secret', $errors[0]);
+    }
+
     /**
      * @return iterable<string, array{string}>
      */
@@ -44,15 +66,7 @@ final class UnreachableRedisThrottleTest extends TestCase
 
     private function assertFailsOpenWithinTimeout(string $dsn): void
     {
-        $throttle = new Throttle(
-            new LazyRedisStorage(static fn (): object => RedisConnectionFactory::create($dsn, 0.2, 0.2)),
-            'app',
-            60,
-            50,
-            300,
-            3,
-            clock: static fn (): int => 1_800_000_000,
-        );
+        $throttle = $this->throttle($dsn);
         $start = microtime(true);
         $sends = [];
 
@@ -63,5 +77,19 @@ final class UnreachableRedisThrottleTest extends TestCase
         // One connection attempt per window: the storage is not used again after it fails.
         $this->assertLessThan(1.0, microtime(true) - $start);
         $this->assertSame([true, true, true, false, false, false, false, false, false, false], $sends);
+    }
+
+    private function throttle(string $dsn, ?LoggerInterface $logger = null): Throttle
+    {
+        return new Throttle(
+            new LazyRedisStorage(static fn (): object => RedisConnectionFactory::create($dsn, 0.2, 0.2)),
+            'app',
+            60,
+            50,
+            300,
+            3,
+            $logger,
+            static fn (): int => 1_800_000_000,
+        );
     }
 }

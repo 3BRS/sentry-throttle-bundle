@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ThreeBRS\SentryThrottleBundle\Tests\Integration;
 
 use Monolog\Handler\TestHandler;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RequiresMethod;
 use Symfony\Bundle\MonologBundle\MonologBundle;
 use Symfony\Component\Config\Definition\Exception\InvalidConfigurationException;
@@ -48,13 +49,15 @@ final class ThrottleServiceTest extends IntegrationTestCase
         $this->assertTrue($container->initialized(ThreeBRSSentryThrottleExtension::REDIS));
     }
 
-    public function testUsesExistingRedisClientService(): void
+    /**
+     * @param string|array{service: string} $redis
+     */
+    #[DataProvider('existingRedisClientServices')]
+    public function testUsesExistingRedisClientService(string|array $redis): void
     {
         $container = $this->bootKernel([
             'prefix' => $this->prefix(),
-            'redis' => [
-                'service' => 'app.redis',
-            ],
+            'redis' => $redis,
             'per_fingerprint' => 1,
         ], [], static function (ContainerBuilder $container): void {
             $container->register('app.redis', \Redis::class)
@@ -66,6 +69,17 @@ final class ThrottleServiceTest extends IntegrationTestCase
         $this->assertTrue($throttle->decide('a')->send);
         $this->assertFalse($throttle->decide('a')->send);
         $this->assertFalse($container->has(ThreeBRSSentryThrottleExtension::REDIS));
+    }
+
+    /**
+     * @return iterable<string, array{string|array{service: string}}>
+     */
+    public static function existingRedisClientServices(): iterable
+    {
+        yield 'service id' => ['app.redis'];
+        yield 'service option' => [[
+            'service' => 'app.redis',
+        ]];
     }
 
     public function testRejectsUnknownRedisClientService(): void
@@ -138,6 +152,66 @@ final class ThrottleServiceTest extends IntegrationTestCase
                 unset($_SERVER[$name]);
             }
         }
+    }
+
+    public function testTakesRedisDsnFromEnvironmentVariable(): void
+    {
+        $_SERVER['SENTRY_THROTTLE_TEST_DSN'] = self::redisDsn();
+
+        try {
+            $container = $this->bootKernel([
+                'prefix' => $this->prefix(),
+                'redis' => '%env(SENTRY_THROTTLE_TEST_DSN)%',
+                'per_fingerprint' => 1,
+            ]);
+            $throttle = $this->throttle($container);
+
+            $this->assertTrue($throttle->decide('a')->send);
+            $this->assertFalse($throttle->decide('a')->send);
+            $this->assertTrue($container->initialized(ThreeBRSSentryThrottleExtension::REDIS));
+        } finally {
+            unset($_SERVER['SENTRY_THROTTLE_TEST_DSN']);
+        }
+    }
+
+    #[RequiresMethod(MonologBundle::class, 'build')]
+    public function testSendsEveryEventWithLimitFromEnvironmentVariableOutOfRange(): void
+    {
+        $_SERVER['SENTRY_THROTTLE_TEST_PER_FINGERPRINT'] = '0';
+
+        try {
+            $container = $this->bootKernel([
+                'prefix' => $this->prefix(),
+                'redis' => self::redisDsn(),
+                'per_fingerprint' => '%env(int:SENTRY_THROTTLE_TEST_PER_FINGERPRINT)%',
+            ], [new MonologBundle()], static function (ContainerBuilder $container): void {
+                $container->register('test.log_handler', TestHandler::class)->setPublic(true);
+                $container->loadFromExtension('monolog', [
+                    'handlers' => [
+                        'test' => [
+                            'type' => 'service',
+                            'id' => 'test.log_handler',
+                            'channels' => [Throttle::LOG_CHANNEL],
+                        ],
+                    ],
+                ]);
+            });
+            $throttle = $this->throttle($container);
+
+            $this->assertTrue($throttle->decide('a')->send);
+            $this->assertTrue($throttle->decide('a')->send);
+        } finally {
+            unset($_SERVER['SENTRY_THROTTLE_TEST_PER_FINGERPRINT']);
+        }
+
+        $handler = $container->get('test.log_handler');
+        $this->assertInstanceOf(TestHandler::class, $handler);
+        $records = $handler->getRecords();
+        $this->assertCount(1, $records);
+        $this->assertSame('WARNING', $records[0]['level_name']);
+        $context = $records[0]['context'];
+        $this->assertIsArray($context);
+        $this->assertSame('per_fingerprint', $context['options'] ?? null);
     }
 
     #[RequiresMethod(MonologBundle::class, 'build')]
