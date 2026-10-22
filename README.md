@@ -90,12 +90,14 @@ An application that sends log records through the Monolog handler of the Sentry 
 
 ## Sentry SDK integration
 
-Set the bundle's `before_send` callback in `config/packages/sentry.yaml`:
+Add the bundle's `before_send` callback to the Sentry options in `config/packages/sentry.yaml`. The Flex recipe of `sentry/sentry-symfony` enables the Sentry bundle in `prod` only and puts its configuration under `when@prod`, so add it there:
 
 ```yaml
-sentry:
-    options:
-        before_send: 'ThreeBRS\SentryThrottleBundle\Sentry\ThrottleBeforeSend'
+when@prod:
+    sentry:
+        dsn: '%env(SENTRY_DSN)%'
+        options:
+            before_send: 'ThreeBRS\SentryThrottleBundle\Sentry\ThrottleBeforeSend'
 ```
 
 Every error event the SDK sends goes through it: exceptions captured by the SDK's listeners (including failed Messenger messages), fatal errors, records of the SDK's Monolog handler and direct `captureException()` or `captureMessage()` calls. Transactions use `before_send_transaction` and are not throttled. The SDK calls `before_send` after `sample_rate` and `ignore_exceptions`, so events dropped by them are not counted.
@@ -168,6 +170,7 @@ three_brs_sentry_throttle:
 ```
 
 - The DSN has the same format as for Symfony's Redis cache adapter (the connection is made by `RedisAdapter::createConnection()` from `symfony/cache`). Query parameters of the DSN, such as `?timeout=1`, override `timeout` and `read_timeout`.
+- `timeout` limits connecting, not the DNS lookup of the host name before it. When the host name does not resolve, e.g. after a typo or during a DNS outage, the first event of each process waits as long as the resolver, typically seconds. Use a host name that resolves even while Redis is down, such as a Kubernetes Service, or an IP address.
 - phpredis is used when the extension is loaded, Predis otherwise. Predis 1 needs the `sockets` PHP extension to disable Nagle's algorithm; without it each transaction below takes two round trips instead of one.
 - The connection is opened with the first event, not when the container boots.
 
@@ -341,12 +344,14 @@ Deptrac keeps the core independent of the optional integrations: `Throttle`, `Fi
 
 ## Continuous Integration
 
-GitHub Actions runs these jobs, each with a Redis service:
+GitHub Actions runs these jobs on pushes and pull requests to `main` and every Monday at 06:00 UTC, so that a new release of a dependency that breaks the bundle shows up without a change in the repository. Each job has a Redis service:
 
 | Job | PHP | Dependencies |
 |-----|-----|--------------|
 | `lowest` | 8.1 | `--prefer-lowest`: Symfony 5.4, Monolog 2.5, Sentry SDK 4.0 (without `sentry/sentry-symfony`, whose 5.x versions need SDK 4.6.1+), Predis 1.1 |
 | `symfony-6-0` | 8.1 | `--prefer-lowest` with Symfony 6.0, Monolog 2.5 and Predis 2.0, including `sentry/sentry-symfony` 5.0 |
+| `symfony-6-4` | 8.2 | latest versions with Symfony 6.4 |
+| `symfony-7-4` | 8.4 | latest versions with Symfony 7.4 |
 | `highest` | 8.5 | latest versions; also `composer validate`, ECS, PHPStan, Deptrac and Rector |
 | `without-optional-packages` | 8.5 | latest versions without the Sentry and Monolog packages |
 
