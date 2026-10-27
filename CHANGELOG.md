@@ -3,7 +3,7 @@
 Notable changes to `3brs/sentry-throttle-bundle`. Follows
 [Keep a Changelog](https://keepachangelog.com/) and [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0] - 2026-10-27
 
 ### Added
 - **Supported versions:** PHP 8.1+ and Symfony 5.4, 6.x, 7.x or 8.x; the Sentry SDK integration
@@ -36,4 +36,4 @@ Notable changes to `3brs/sentry-throttle-bundle`. Follows
 - **`enabled`** switches the throttle off per environment; both integrations then pass every event
   through.
 
-[Unreleased]: https://github.com/3BRS/sentry-throttle-bundle/commits/main
+[1.0.0]: https://github.com/3BRS/sentry-throttle-bundle/releases/tag/v1.0.0
