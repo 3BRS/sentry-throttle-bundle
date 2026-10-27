@@ -23,7 +23,7 @@
 ## Features
 
 - **Per-fingerprint limit** – at most `per_fingerprint` events with the same fingerprint per window (by default 50 per 60 seconds).
-- **Global cap** – at most `max_per_window` events per window in total (by default 300). Only events within the per-fingerprint limit count towards it, so events of one error over its limit do not use up the cap for other errors.
+- **Global cap** – at most `max_per_window` events per window in total (by default 300). Only events within the per-fingerprint limit count towards it, so events of one error over its limit do not use up the cap for other errors. Once the cap is reached, new errors are dropped too until the window ends – see [Limits](#limits).
 - **Occurrence tags** – the first event of a fingerprint sent after drops gets the tags `throttled: true` and `throttle_occurrences: <events dropped since the previous sent one>`, so that you can search and alert on them in Sentry.
 - **Fail-open** – when Redis is down or slow, or anything inside the bundle fails, the event is sent. The bundle never throws. A per-process cap still applies while Redis is unavailable.
 - **Two integrations** – a `before_send` callback for the official Sentry SDK, and a wrapper for a Monolog handler that sends to Sentry without the SDK.
@@ -49,7 +49,7 @@ With Symfony Flex the bundle is registered during the installation, and the `cac
 
 ### Step 2: Register the bundle
 
-Register the bundle in `config/bundles.php`:
+Symfony Flex does this in Step 1. Without Flex, register the bundle in `config/bundles.php`:
 
 ```php
 return [
@@ -78,6 +78,7 @@ when@test:
 
 - `prefix` is part of every Redis key, so that several applications can share one Redis. `prefix` and `redis` are required while the throttle is enabled.
 - `enabled` decides which services are registered, so it cannot come from an environment variable; switch it off per environment as above. With `enabled: false` both integrations pass every event through and Redis is not used.
+- The limits have defaults: 50 events of one error and 300 events in total per 60 seconds. [Limits](#limits) explains what happens when they are reached, [Options](#options) lists every option.
 
 ### Step 4: Connect the throttle to Sentry
 
@@ -146,6 +147,46 @@ three_brs_sentry_throttle:
 - The fingerprint comes from `context['exception']` when it holds an exception, otherwise from the level and the message.
 - It works with Monolog 2 and 3.
 
+## Limits
+
+The throttle counts the events of the current window and drops an event when it would go over a limit. Events of the same error share a [fingerprint](#fingerprint); numbers, hashes and UUIDs in the message do not make two events different.
+
+| Option | Default | What it limits | When the limit is reached |
+|--------|---------|----------------|---------------------------|
+| `window` | `60` | Length of the window in seconds. The limits below count per window. | Not a limit itself. Windows are fixed periods aligned to the clock, e.g. every full minute with `60`, every full ten minutes with `600`. Both limits start again from zero when a new window starts. |
+| `per_fingerprint` | `50` | Events of one error sent per window. | Further events of that error are dropped until the window ends. Other errors are not affected. |
+| `max_per_window` | `300` | Events sent per window in total, all errors together. Only events within `per_fingerprint` count, so one error adds at most `per_fingerprint` events. | Every further event is dropped until the window ends, **including an error that has not occurred before**. |
+| `fallback_max_per_window` | `50` | Events sent per window while Redis is unavailable, counted by each process on its own. | Further events of that process are dropped until the window ends. See [Fail-open](#fail-open). |
+
+### What a dropped event means
+
+- It does not reach Sentry: no event, no new issue, no notification, and it does not use up the Sentry quota.
+- Only what goes to Sentry is affected. Logging stays as it is: log files and other log handlers get every record as before.
+- The throttle counts dropped events per fingerprint. The next event of that error that is sent – usually the first one in a later window – carries two tags:
+  - `throttled: true`
+  - `throttle_occurrences: <number of events dropped since the previous sent event of that error>`
+- An error that was dropped and does not occur again within 24 hours after its last drop is never reported, not even by these tags. This can happen to a new error dropped by `max_per_window`.
+- In Sentry, search for `throttled:true` to find the events sent after drops, and use `throttle_occurrences` to see how many were dropped.
+
+### Example
+
+With the default options, an exception starts at 12:00:10 and repeats 20 times a second:
+
+| Time | What happens |
+|------|--------------|
+| 12:00:10–12:00:12 | The first 50 events are sent. |
+| 12:00:12–12:00:59 | The remaining ~950 events of the minute are dropped. Other errors are still sent, because this one adds only 50 events towards the 300 in total. |
+| 12:01:00 | A new window starts. The first event of the exception is sent with `throttled: true` and `throttle_occurrences: 950`, the next 49 events are sent without the tags, and the rest of the minute is dropped again. |
+
+If six different errors reach 50 events each within one minute, the total of 300 is reached and every further event of that minute is dropped, whichever error it belongs to. A single error cannot reach the total on its own. Many different errors can – for example when each message contains text that changes and has no digits, such as user input, a URL or an e-mail address.
+
+### Choosing the values
+
+- **A longer `window`** means fewer events from a long storm, but also that a reached `max_per_window` hides new errors for longer: with `window: 600`, up to ten minutes. The limits stay per window, so with `window: 600` the default `per_fingerprint` sends 50 events of one error per ten minutes.
+- **The limits are not spread evenly over the window.** All 50 events of one error can arrive in the first second of the window, and up to twice as many within a few seconds around the start of a new window.
+- **Keep `max_per_window` well above `per_fingerprint`**, a few times higher, so that several storms at the same time still leave room for new errors.
+- **Use a different `prefix` for each application and environment that share one Redis.** Applications or environments with the same `prefix` share the limits: events of one of them use up the limits of the others.
+
 ## Redis
 
 `redis` takes a DSN or the id of an existing Redis client service. A value from an environment variable or with a scheme (`redis://…`, `rediss://…`) is a DSN, any other value a service id – the same rule as for the providers of Symfony cache pools.
@@ -208,17 +249,17 @@ The first event in a process also opens the connection.
 
 The fingerprint only decides what is counted together; it does not change how Sentry groups events.
 
-### Windows and limits
+### Counters in Redis
 
-- Windows are fixed periods of `window` seconds (by default 60).
-- An event over the per-fingerprint limit is dropped. Otherwise it is checked against the global cap, and an event over the cap is dropped too. Both limits count the sent events of the window.
-- Dropped events are counted per fingerprint. The next event of that fingerprint that is sent carries the occurrence tags.
-- Redis keys start with `sentry_throttle:{prefix}:`. The counters of a window expire after two windows. The number of a fingerprint's dropped events expires 24 hours after the last drop, so drops older than that are not reported.
+- An event is checked against `per_fingerprint` first and then against `max_per_window`. Both limits count only the sent events of the window.
+- Redis keys start with `sentry_throttle:{prefix}:`: a counter per fingerprint and window, a total per window, and a count of dropped events per fingerprint.
+- The counters of a window expire after two windows. The count of a fingerprint's dropped events expires 24 hours after its last drop.
 
 ### Fail-open
 
 - Any error inside the bundle: the event is sent.
-- When Redis fails, the process does not use Redis until the current window ends and sends at most `fallback_max_per_window` events in that window. "Process" means one request in PHP-FPM and the whole process in a long-running worker. Events dropped by this cap are not counted in `throttle_occurrences`.
+- When Redis fails, the process does not use Redis until the current window ends and sends at most `fallback_max_per_window` events in that window. Events over it are dropped and are not counted in `throttle_occurrences`.
+- "Process" means one request in PHP-FPM and the whole process in a long-running worker, e.g. a Messenger consumer. In PHP-FPM each request therefore tries Redis again with its first event and has its own `fallback_max_per_window`: while Redis is unavailable, the application as a whole is not limited.
 - The failure is logged as a warning, at most once per window and process. The warning contains the error message with the Redis password from the DSN replaced by `***`. With MonologBundle it goes to the `sentry_throttle` log channel; keep that channel away from Sentry:
 
 ```yaml
@@ -238,6 +279,24 @@ All options except `enabled`, the service id in `redis` and `monolog`, which dec
 - A `redis` value from an environment variable is always a DSN.
 - The values are not validated when the container is compiled, but when they are used. With an empty `prefix`, or with `window` or a limit below 1, the throttle sends every event and logs a warning. A timeout that is not greater than 0, also one in the DSN, is handled as a Redis failure.
 - A missing variable, or one that is not a number where a number is expected, makes Symfony fail when it creates the throttle, as with any service that uses environment variables. For the DSN and the timeouts that happens with the first event, which is then handled as a Redis failure.
+
+## Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `true` | With `false`, both integrations pass every event to Sentry and Redis is not used. It decides which services are registered, so it cannot come from an environment variable; set it per environment with `when@dev` / `when@test`. |
+| `prefix` | none, required | Part of every Redis key. Use one prefix per application and environment that share one Redis: the same prefix means shared limits. |
+| `redis` | none, required | A DSN, e.g. `rediss://user:password@redis.example.com:6379`, or the id of an existing Redis client service; the long form is `redis.dsn` or `redis.service`. See [Redis](#redis). |
+| `redis.timeout` | `0.2` | Connect timeout in seconds, DSN only. It does not cover the DNS lookup of the host name. |
+| `redis.read_timeout` | `0.2` | Timeout for a reply of Redis in seconds, DSN only. |
+| `window` | `60` | Window length in seconds. See [Limits](#limits). |
+| `per_fingerprint` | `50` | Events of one error sent per window. |
+| `max_per_window` | `300` | Events sent per window in total, all errors together. |
+| `fallback_max_per_window` | `50` | Events one process sends per window while Redis is unavailable. |
+| `monolog.handlers` | `[]` | Ids of the Monolog handler services that send to Sentry; Monolog integration only. See [Monolog integration](#monolog-integration). |
+| `monolog.tags` | `context` | Record field the wrapped handler reads Sentry tags from: `context` or `extra`. |
+
+The numbers must be at least 1 and the timeouts greater than 0. A value out of range written in the configuration makes `cache:clear` fail; for values from environment variables see [Environment variables](#environment-variables).
 
 ## Configuration reference
 
